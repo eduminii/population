@@ -1,11 +1,216 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>우리 동네 인구 구조</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>지역별 인구 검색</title>
+    <style>
+        body {
+            font-family: 'Malgun Gothic', sans-serif;
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: 1rem;
+            color: #333;
+        }
+        .search-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 1rem;
+        }
+        input {
+            flex-grow: 1;
+            padding: 10px;
+            font-size: 1rem;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 1rem;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result-card {
+            margin-top: 1.5rem;
+            padding: 1.5rem;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #f8f9fa;
+        }
+        .result-card h2 {
+            margin-top: 0;
+            color: #0056b3;
+        }
+        .result-item {
+            font-size: 1.2rem;
+            margin: 10px 0;
+        }
+        .message {
+            margin-top: 1rem;
+            color: #d9534f;
+            font-weight: bold;
+        }
+        #loading {
+            color: #5bc0de;
+            font-weight: bold;
+        }
+    </style>
 </head>
 <body>
-  <h1>🏘️ 우리 동네 인구 구조</h1>
-  <p>곧 우리 동네 인구 데이터가 여기에 나타납니다! (레벨 2에서 만들어요)</p>
+
+    <h1>🇰🇷 지역별 인구 검색</h1>
+    <p id="loading">데이터를 불러오고 분석하는 중입니다. 잠시만 기다려주세요...</p>
+    
+    <div id="main-content" style="display: none;">
+        <div class="search-container">
+            <input type="text" id="regionInput" list="regionList" placeholder="지역명 입력 (예: 서울특별시 종로구)">
+            <datalist id="regionList"></datalist>
+            <button onclick="searchRegion()">검색</button>
+        </div>
+        <div id="msg" class="message"></div>
+
+        <div id="resultBox" class="result-card" style="display: none;">
+            <h2 id="resTitle"></h2>
+            <div class="result-item">🧑‍🤝‍🧑 <strong>총 인구:</strong> <span id="resTotal"></span>명</div>
+            <div class="result-item">👨 <strong>남성:</strong> <span id="resMale"></span>명</div>
+            <div class="result-item">👩 <strong>여성:</strong> <span id="resFemale"></span>명</div>
+        </div>
+    </div>
+
+    <script>
+        const CSV_URL = 'https://raw.githubusercontent.com/greatsong/modudata/main/data/population_latest.csv';
+        let populationData = {}; // 파싱된 데이터를 담을 객체
+
+        // 1. 단순 split(',') 대신 큰따옴표 안의 콤마를 무시하고 컬럼을 분리하는 파서
+        function parseCSVLine(line) {
+            let cols = [];
+            let inQuotes = false;
+            let val = '';
+            for (let i = 0; i < line.length; i++) {
+                let char = line[i];
+                if (char === '"') {
+                    inQuotes = !inQuotes; // 따옴표 토글
+                } else if (char === ',' && !inQuotes) {
+                    cols.push(val.trim());
+                    val = '';
+                } else {
+                    val += char;
+                }
+            }
+            cols.push(val.trim());
+            return cols;
+        }
+
+        // 2. 데이터 가져오기 및 처리
+        async function init() {
+            try {
+                // cp949 인코딩 처리
+                const response = await fetch(CSV_URL);
+                const buffer = await response.arrayBuffer();
+                const text = new TextDecoder('euc-kr').decode(buffer);
+                
+                const lines = text.trim().split('\n');
+                if (lines.length === 0) throw new Error("데이터가 비어있습니다.");
+
+                const headers = parseCSVLine(lines[0]);
+                
+                // 총인구수 등 집계 열을 피하고 "n세" 나이 열만 찾기 위해 정규식 사용
+                const ageColumnRegex = /_\d+세(?:이상)?$/; 
+                let maleCols = [];
+                let femaleCols = [];
+
+                headers.forEach((h, idx) => {
+                    if (h.includes('_남_') && ageColumnRegex.test(h)) maleCols.push(idx);
+                    if (h.includes('_여_') && ageColumnRegex.test(h)) femaleCols.push(idx);
+                });
+
+                const datalist = document.getElementById('regionList');
+
+                // 두 번째 줄부터 데이터 읽기
+                for (let i = 1; i < lines.length; i++) {
+                    const line = lines[i];
+                    if (!line.trim()) continue;
+
+                    const cols = parseCSVLine(line);
+                    if (cols.length < headers.length) continue;
+
+                    // 행정구역명 파싱: 이름 뒤의 " (1111000000)" 괄호 부분 제거
+                    const rawRegion = cols[0];
+                    const cleanRegion = rawRegion.replace(/\s*\([^)]*\)$/, '').trim();
+
+                    // 각 열의 데이터를 숫자로 변환하여 합산 (숫자 안의 콤마 제거)
+                    let maleSum = 0;
+                    let femaleSum = 0;
+
+                    maleCols.forEach(idx => {
+                        maleSum += parseInt(cols[idx].replace(/,/g, '') || '0', 10);
+                    });
+                    femaleCols.forEach(idx => {
+                        femaleSum += parseInt(cols[idx].replace(/,/g, '') || '0', 10);
+                    });
+
+                    // _계_ 열 대신 남/여 합산값 사용
+                    populationData[cleanRegion] = {
+                        total: maleSum + femaleSum,
+                        male: maleSum,
+                        female: femaleSum
+                    };
+
+                    // datalist에 지역 옵션 추가
+                    const option = document.createElement('option');
+                    option.value = cleanRegion;
+                    datalist.appendChild(option);
+                }
+
+                // UI 전환
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('main-content').style.display = 'block';
+
+            } catch (error) {
+                document.getElementById('loading').textContent = '데이터를 불러오는 데 실패했습니다: ' + error.message;
+                document.getElementById('loading').style.color = 'red';
+            }
+        }
+
+        // 3. 검색 기능
+        function searchRegion() {
+            const inputVal = document.getElementById('regionInput').value.trim();
+            const msgDiv = document.getElementById('msg');
+            const resultBox = document.getElementById('resultBox');
+
+            if (!inputVal) return;
+
+            const data = populationData[inputVal];
+
+            if (data) {
+                msgDiv.textContent = '';
+                document.getElementById('resTitle').textContent = inputVal;
+                // toLocaleString()으로 천단위 콤마 표시
+                document.getElementById('resTotal').textContent = data.total.toLocaleString();
+                document.getElementById('resMale').textContent = data.male.toLocaleString();
+                document.getElementById('resFemale').textContent = data.female.toLocaleString();
+                resultBox.style.display = 'block';
+            } else {
+                msgDiv.textContent = '⚠️ 일치하는 지역이 없습니다. 자동완성 목록에서 선택하거나 정확한 지역명을 입력해 주세요.';
+                resultBox.style.display = 'none';
+            }
+        }
+
+        // 엔터키 지원
+        document.getElementById('regionInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchRegion();
+            }
+        });
+
+        // 스크립트 실행
+        init();
+    </script>
 </body>
 </html>
